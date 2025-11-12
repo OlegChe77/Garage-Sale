@@ -1,0 +1,5 @@
+{
+  "name": "Gemini Garage Sale Helper",
+  "description": "An app to identify valuable items in a cluttered garage using image analysis, generate AI images, and chat with an AI assistant. It helps you find hidden treasures and estimate their value.",
+  "requestFramePermissions": []
+}
