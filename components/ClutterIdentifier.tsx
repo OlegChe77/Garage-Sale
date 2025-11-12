@@ -1,8 +1,9 @@
-import React, { useState, useCallback, useRef } from 'react';
+
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { analyzeClutter } from '../services/geminiService';
-import { IdentifiedItem, BoundingBox, CropRegion } from '../types';
+import { IdentifiedItem, BoundingBox, CropRegion, SavedItem } from '../types';
 import Spinner from './Spinner';
-import { IconUpload, IconScan, IconValue, IconLink, IconLightbulb, IconFire, IconTrendingUp, IconClock, IconSearch, IconCrop, IconX, IconChevronDown, IconChevronUp } from './Icons';
+import { IconUpload, IconScan, IconValue, IconLink, IconLightbulb, IconFire, IconTrendingUp, IconClock, IconSearch, IconCrop, IconX, IconChevronDown, IconChevronUp, IconSave, IconTrash } from './Icons';
 import { useTranslation } from '../App';
 import ScanningOverlay from './ScanningOverlay';
 
@@ -36,6 +37,7 @@ const ClutterIdentifier: React.FC = () => {
     const [loupeSize, setLoupeSize] = useState(150);
     const [loupeZoom, setLoupeZoom] = useState(2.5);
     const viewportRef = useRef<HTMLDivElement>(null);
+    const imageRef = useRef<HTMLImageElement>(null); // Ref for the image itself
 
     // State for selection
     const [isSelecting, setIsSelecting] = useState(false);
@@ -45,10 +47,52 @@ const ClutterIdentifier: React.FC = () => {
     
     // State for collapsible sources
     const [sourcesVisible, setSourcesVisible] = useState<Record<number, boolean>>({});
+    
+    // State for saved items
+    const [savedItems, setSavedItems] = useState<SavedItem[]>([]);
+
+    // Load saved items from localStorage on mount
+    useEffect(() => {
+        try {
+            const itemsFromStorage = localStorage.getItem('savedGarageSaleItems');
+            if (itemsFromStorage) {
+                setSavedItems(JSON.parse(itemsFromStorage));
+            }
+        } catch (error) {
+            console.error("Could not load saved items from localStorage", error);
+        }
+    }, []);
+
+    // Save items to localStorage whenever they change
+    useEffect(() => {
+        try {
+            localStorage.setItem('savedGarageSaleItems', JSON.stringify(savedItems));
+        } catch (error) {
+            console.error("Could not save items to localStorage", error);
+        }
+    }, [savedItems]);
+
 
     const toggleSourceVisibility = (index: number) => {
         setSourcesVisible(prev => ({...prev, [index]: !prev[index]}));
     }
+
+    const handleSaveItem = (itemToSave: IdentifiedItem) => {
+        // Prevent duplicates
+        if (savedItems.some(item => item.item === itemToSave.item && item.marketValue === itemToSave.marketValue)) {
+            return;
+        }
+        const newItem: SavedItem = {
+            id: `${Date.now()}-${itemToSave.item}`,
+            item: itemToSave.item,
+            marketValue: itemToSave.marketValue
+        };
+        setSavedItems(prevItems => [...prevItems, newItem]);
+    };
+
+    const handleDeleteItem = (idToDelete: string) => {
+        setSavedItems(prevItems => prevItems.filter(item => item.id !== idToDelete));
+    };
 
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -140,14 +184,24 @@ const ClutterIdentifier: React.FC = () => {
     }
 
     const getBoundingBoxStyle = (box: BoundingBox): React.CSSProperties => {
-        if (!viewportRef.current) return {};
-        const { clientWidth, clientHeight } = viewportRef.current;
+        if (!imageRef.current || !viewportRef.current) return {};
+    
+        const imageRect = imageRef.current.getBoundingClientRect();
+        const containerRect = viewportRef.current.getBoundingClientRect();
+    
+        // Position of the image relative to its container
+        const relativeTop = imageRect.top - containerRect.top;
+        const relativeLeft = imageRect.left - containerRect.left;
+        
+        const renderedWidth = imageRect.width;
+        const renderedHeight = imageRect.height;
+    
         return {
             position: 'absolute',
-            left: `${box.x1 * clientWidth}px`,
-            top: `${box.y1 * clientHeight}px`,
-            width: `${(box.x2 - box.x1) * clientWidth}px`,
-            height: `${(box.y2 - box.y1) * clientHeight}px`,
+            left: `${relativeLeft + (box.x1 * renderedWidth)}px`,
+            top: `${relativeTop + (box.y1 * renderedHeight)}px`,
+            width: `${(box.x2 - box.x1) * renderedWidth}px`,
+            height: `${(box.y2 - box.y1) * renderedHeight}px`,
         };
     };
 
@@ -171,14 +225,29 @@ const ClutterIdentifier: React.FC = () => {
     };
     
     const getLoupeStyle = (): React.CSSProperties => {
-        if (!viewportRef.current || !imagePreview) return {};
-        const { clientWidth, clientHeight } = viewportRef.current;
-        
+        if (!imageRef.current || !imagePreview) return {};
+        const { naturalWidth, naturalHeight } = imageRef.current;
+        const { width: renderWidth, height: renderHeight, x: renderLeft, y: renderTop } = imageRef.current.getBoundingClientRect();
+
+        const scaleX = renderWidth / naturalWidth;
+        const scaleY = renderHeight / naturalHeight;
+        const scale = Math.min(scaleX, scaleY);
+
+        const imgDisplayWidth = naturalWidth * scale;
+        const imgDisplayHeight = naturalHeight * scale;
+
+        const viewportRect = viewportRef.current?.getBoundingClientRect();
+        const viewportLeft = viewportRect?.left || 0;
+        const viewportTop = viewportRect?.top || 0;
+
+        const imgRenderLeft = renderLeft - viewportLeft + (renderWidth - imgDisplayWidth) / 2;
+        const imgRenderTop = renderTop - viewportTop + (renderHeight - imgDisplayHeight) / 2;
+
         const top = loupePosition.y - loupeSize / 2;
         const left = loupePosition.x - loupeSize / 2;
         
-        const bgX = -(loupePosition.x * loupeZoom - loupeSize / 2);
-        const bgY = -(loupePosition.y * loupeZoom - loupeSize / 2);
+        const bgX = -((loupePosition.x - imgRenderLeft) * loupeZoom - loupeSize / 2);
+        const bgY = -((loupePosition.y - imgRenderTop) * loupeZoom - loupeSize / 2);
 
         return {
             position: 'absolute',
@@ -190,7 +259,7 @@ const ClutterIdentifier: React.FC = () => {
             border: '3px solid #facc15', // yellow-400
             backgroundImage: `url(${imagePreview})`,
             backgroundRepeat: 'no-repeat',
-            backgroundSize: `${clientWidth * loupeZoom}px ${clientHeight * loupeZoom}px`,
+            backgroundSize: `${imgDisplayWidth * loupeZoom}px ${imgDisplayHeight * loupeZoom}px`,
             backgroundPosition: `${bgX}px ${bgY}px`,
             pointerEvents: 'none',
             zIndex: 40,
@@ -228,26 +297,45 @@ const ClutterIdentifier: React.FC = () => {
 
     const endAction = () => {
         if (isSelecting) {
-            if (selectionRect && viewportRef.current) {
-                const { clientWidth, clientHeight } = viewportRef.current;
+            if (selectionRect && imageRef.current) {
+                const { naturalWidth, naturalHeight } = imageRef.current;
+                const { width: renderWidth, height: renderHeight, x: renderLeft, y: renderTop } = imageRef.current.getBoundingClientRect();
+                
+                const scaleX = renderWidth / naturalWidth;
+                const scaleY = renderHeight / naturalHeight;
+                const scale = Math.min(scaleX, scaleY);
+                
+                const imgDisplayWidth = naturalWidth * scale;
+                const imgDisplayHeight = naturalHeight * scale;
+                
+                const viewportRect = viewportRef.current?.getBoundingClientRect();
+                const viewportLeft = viewportRect?.left || 0;
+                const viewportTop = viewportRect?.top || 0;
+
+                const imgRenderLeft = renderLeft - viewportLeft + (renderWidth - imgDisplayWidth) / 2;
+                const imgRenderTop = renderTop - viewportTop + (renderHeight - imgDisplayHeight) / 2;
+                
                 const { startX, startY, endX, endY } = selectionRect;
 
-                const x1 = Math.min(startX, endX);
-                const y1 = Math.min(startY, endY);
-                const x2 = Math.max(startX, endX);
-                const y2 = Math.max(startY, endY);
-
+                const x1 = Math.max(imgRenderLeft, Math.min(startX, endX));
+                const y1 = Math.max(imgRenderTop, Math.min(startY, endY));
+                const x2 = Math.min(imgRenderLeft + imgDisplayWidth, Math.max(startX, endX));
+                const y2 = Math.min(imgRenderTop + imgDisplayHeight, Math.max(startY, endY));
+                
                 if ((x2 - x1) > 10 && (y2 - y1) > 10) {
                     setCropRegion({
-                        x: x1 / clientWidth,
-                        y: y1 / clientHeight,
-                        width: (x2 - x1) / clientWidth,
-                        height: (y2 - y1) / clientHeight,
+                        x: (x1 - imgRenderLeft) / imgDisplayWidth,
+                        y: (y1 - imgRenderTop) / imgDisplayHeight,
+                        width: (x2 - x1) / imgDisplayWidth,
+                        height: (y2 - y1) / imgDisplayHeight,
                     });
                 } else {
                     setSelectionRect(null);
                     setCropRegion(null);
                 }
+            } else {
+                 setSelectionRect(null);
+                 setCropRegion(null);
             }
             setIsSelecting(false);
         }
@@ -335,7 +423,8 @@ const ClutterIdentifier: React.FC = () => {
                         </div>
                          <div 
                             ref={viewportRef} 
-                            className={`relative w-full max-w-4xl mx-auto rounded-md overflow-hidden touch-none ${isSelecting ? 'cursor-crosshair' : ''}`}
+                            className={`relative w-full max-w-4xl mx-auto rounded-md overflow-hidden touch-none flex justify-center items-center bg-black/20`}
+                            style={{ cursor: isSelecting ? 'crosshair' : 'default' }}
                             onMouseDown={handleMouseDown}
                             onMouseMove={handleMouseMove}
                             onMouseUp={endAction}
@@ -344,17 +433,15 @@ const ClutterIdentifier: React.FC = () => {
                             onTouchMove={handleTouchMove}
                             onTouchEnd={endAction}
                          >
-                            <img src={imagePreview} alt="Analyzed clutter" className="w-full h-auto rounded-md object-contain select-none pointer-events-none" />
+                            <img ref={imageRef} src={imagePreview} alt="Analyzed clutter" className="max-w-full max-h-[70vh] object-contain select-none pointer-events-none" />
                             {isLoading && <ScanningOverlay />}
                             <div style={getSelectionBoxStyle()} />
-                            {cropRegion && !isAnalyzingSelection && (
-                                 <div style={getBoundingBoxStyle(cropRegion)} className="border-2 border-green-500 bg-green-500/20" />
-                            )}
+                            
                             {!isLoading && results.map((item, index) => (
                                 <div
                                     key={`box-${index}`}
                                     style={getBoundingBoxStyle(item.boundingBox)}
-                                    className={`transition-all duration-200 border-2 cursor-pointer ${hoveredIndex === index ? 'border-yellow-400 bg-yellow-400/30' : 'border-indigo-500/50 bg-transparent hover:bg-indigo-500/20'}`}
+                                    className={`transition-all duration-200 border-2 cursor-pointer absolute ${hoveredIndex === index ? 'border-yellow-400 bg-yellow-400/30' : 'border-indigo-500/50 bg-transparent hover:bg-indigo-500/20'}`}
                                     onMouseEnter={() => setHoveredIndex(index)}
                                     onMouseLeave={() => setHoveredIndex(null)}
                                 />
@@ -365,7 +452,9 @@ const ClutterIdentifier: React.FC = () => {
 
                     {results.length > 0 && (
                         <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
-                             <h3 className="text-xl font-bold mb-4 flex items-center text-indigo-400"><IconValue className="w-6 h-6 mr-2" /> {t('clutter.results.title')}</h3>
+                             <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-xl font-bold flex items-center text-indigo-400"><IconValue className="w-6 h-6 mr-2" /> {t('clutter.results.title')}</h3>
+                             </div>
                              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                                 {results.map((item, index) => {
                                     const isSourcesVisible = !!sourcesVisible[index];
@@ -378,8 +467,16 @@ const ClutterIdentifier: React.FC = () => {
                                             onMouseLeave={() => setHoveredIndex(null)}
                                         >
                                             <div className="flex-grow">
-                                                {item.isHighValue && <div className="text-xs font-bold text-yellow-300 mb-1">{t('clutter.results.highValue')}</div>}
-                                                <h4 className="font-bold text-lg text-white">{item.item}</h4>
+                                                <div className="flex justify-between items-start">
+                                                    <div className="flex-1">
+                                                        {item.isHighValue && <div className="text-xs font-bold text-yellow-300 mb-1">{t('clutter.results.highValue')}</div>}
+                                                        <h4 className="font-bold text-lg text-white">{item.item}</h4>
+                                                    </div>
+                                                     <button onClick={() => handleSaveItem(item)} title={t('clutter.button.save')} className="ml-2 p-1.5 text-gray-400 hover:text-white hover:bg-gray-600 rounded-full transition-colors">
+                                                        <IconSave className="w-5 h-5" />
+                                                    </button>
+                                                </div>
+
                                                 <p className="text-gray-400 text-sm mt-2 mb-1 font-semibold">{t('clutter.results.description')}:</p>
                                                 <p className="text-gray-300 text-sm mb-3">{item.description}</p>
                                                 
@@ -450,6 +547,27 @@ const ClutterIdentifier: React.FC = () => {
                                 })}
                             </div>
                         </div>
+                    )}
+                    
+                    {savedItems.length > 0 && (
+                         <div className="bg-gray-800 rounded-lg p-6 shadow-lg mt-8">
+                             <h3 className="text-xl font-bold flex items-center text-indigo-400 mb-4"><IconSave className="w-6 h-6 mr-2" /> {t('clutter.results.savedItemsTitle')}</h3>
+                             <ul className="space-y-2">
+                                {savedItems.map((item) => (
+                                    <li key={item.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded-md">
+                                        <div>
+                                            <p className="font-semibold text-white">{item.item}</p>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            <p className="font-bold text-green-400">{item.marketValue}</p>
+                                             <button onClick={() => handleDeleteItem(item.id)} title={t('clutter.results.removeItem')} className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-600 rounded-full transition-colors">
+                                                <IconTrash className="w-5 h-5" />
+                                            </button>
+                                        </div>
+                                    </li>
+                                ))}
+                             </ul>
+                         </div>
                     )}
                 </div>
             )}

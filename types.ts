@@ -35,3 +35,9 @@ export interface CropRegion {
   width: number;
   height: number;
 }
+
+export interface SavedItem {
+    id: string;
+    item: string;
+    marketValue: string;
+}
